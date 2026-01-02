@@ -11,9 +11,11 @@ import time
 import secrets
 import string
 import os
+import traceback
 from dotenv import load_dotenv
+import ssl
 
-# Load environment variables from .env file
+# Load environment variables from .env file for local development
 load_dotenv()
 
 # Page configuration
@@ -517,6 +519,90 @@ st.markdown("""
         50% { transform: scale(1.2) rotate(5deg); }
         75% { transform: scale(1.1) rotate(-5deg); }
     }
+    
+    /* Copy code button */
+    .copy-code-btn {
+        background: linear-gradient(135deg, #4caf50 0%, #388e3c 100%);
+        color: white;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 500;
+        margin-top: 10px;
+        transition: all 0.3s;
+    }
+    
+    .copy-code-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(56, 142, 60, 0.3);
+    }
+    
+    .copy-success {
+        color: #4caf50;
+        font-size: 12px;
+        margin-top: 5px;
+        display: none;
+    }
+    
+    /* Test email styles */
+    .test-email-container {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 12px;
+        border: 2px solid #e0e0e0;
+        margin: 1rem 0;
+    }
+    
+    .test-email-input {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        margin: 10px 0;
+    }
+    
+    .test-email-btn {
+        background: linear-gradient(135deg, #2196f3 0%, #03a9f4 100%);
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 6px;
+        cursor: pointer;
+        width: 100%;
+        font-weight: 500;
+    }
+    
+    .test-result-success {
+        background: #d4edda;
+        color: #155724;
+        padding: 10px;
+        border-radius: 6px;
+        margin: 10px 0;
+        border-left: 4px solid #28a745;
+    }
+    
+    .test-result-error {
+        background: #f8d7da;
+        color: #721c24;
+        padding: 10px;
+        border-radius: 6px;
+        margin: 10px 0;
+        border-left: 4px solid #dc3545;
+    }
+    
+    .debug-log {
+        background: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 6px;
+        padding: 10px;
+        margin: 10px 0;
+        font-family: 'Courier New', monospace;
+        font-size: 12px;
+        max-height: 200px;
+        overflow-y: auto;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -533,16 +619,9 @@ SUPERIORS = {
     "HR": "hrvolarfashion@gmail.com",
     "Rajeev": "Rajeev@vfemails.com",
     "Krishna": "Krishna@vfemails.com",
-    "Sarath": "Sarath@vfemails.com"
+    "Sarath": "Sarath@vfemails.com",
+    "Demo": "Shinde78617@gmail.com"
 }
-
-# Email configuration - Load from environment variables
-SENDER_EMAIL = os.getenv("SENDER_EMAIL", "hrvolarfashion@gmail.com")
-SENDER_PASSWORD = os.getenv("SENDER_PASSWORD", "")
-
-# Google Sheets configuration
-SHEET_NAME = "Leave_Applications"
-SCOPES = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
 
 # Department options
 DEPARTMENTS = [
@@ -556,72 +635,344 @@ DEPARTMENTS = [
     "Administration"
 ]
 
+# Initialize session state
+if 'approval_code_to_copy' not in st.session_state:
+    st.session_state.approval_code_to_copy = ""
+if 'show_copy_section' not in st.session_state:
+    st.session_state.show_copy_section = False
+if 'test_email_result' not in st.session_state:
+    st.session_state.test_email_result = None
+if 'email_config_status' not in st.session_state:
+    st.session_state.email_config_status = "Not Tested"
+if 'debug_logs' not in st.session_state:
+    st.session_state.debug_logs = []
+
+def add_debug_log(message, level="INFO"):
+    """Add debug log message"""
+    timestamp = datetime.now().strftime('%H:%M:%S')
+    log_entry = f"[{timestamp}] [{level}] {message}"
+    st.session_state.debug_logs.append(log_entry)
+    # Keep only last 50 logs
+    if len(st.session_state.debug_logs) > 50:
+        st.session_state.debug_logs.pop(0)
+
+def log_debug(message):
+    """Log debug messages"""
+    add_debug_log(message, "DEBUG")
+    st.sidebar.text(f"{datetime.now().strftime('%H:%M:%S')}: {message}")
+
 def generate_approval_password():
-    """Generate a 12-digit alphanumeric password"""
+    """Generate a 5-digit alphanumeric password"""
     alphabet = string.ascii_uppercase + string.digits
     # Remove confusing characters (0, O, 1, I, L)
     alphabet = alphabet.replace('0', '').replace('O', '').replace('1', '').replace('I', '').replace('L', '')
-    return ''.join(secrets.choice(alphabet) for _ in range(5))
+    password = ''.join(secrets.choice(alphabet) for _ in range(5))
+    log_debug(f"Generated approval password: {password}")
+    return password
 
-def get_google_creds():
-    """Load Google credentials from environment variables"""
+def get_google_credentials():
+    """Get Google credentials from Streamlit secrets or environment variables"""
     try:
-        creds_dict = {
-            "type": os.getenv("GOOGLE_TYPE", "service_account"),
-            "project_id": os.getenv("GOOGLE_PROJECT_ID", ""),
-            "private_key_id": os.getenv("GOOGLE_PRIVATE_KEY_ID", ""),
-            "private_key": os.getenv("GOOGLE_PRIVATE_KEY", "").replace('\\n', '\n'),
-            "client_email": os.getenv("GOOGLE_CLIENT_EMAIL", ""),
-            "client_id": os.getenv("GOOGLE_CLIENT_ID", ""),
-            "auth_uri": os.getenv("GOOGLE_AUTH_URI", "https://accounts.google.com/o/oauth2/auth"),
-            "token_uri": os.getenv("GOOGLE_TOKEN_URI", "https://oauth2.googleapis.com/token"),
-            "auth_provider_x509_cert_url": os.getenv("GOOGLE_AUTH_PROVIDER_X509_CERT_URL", "https://www.googleapis.com/oauth2/v1/certs"),
-            "client_x509_cert_url": os.getenv("GOOGLE_CLIENT_X509_CERT_URL", "")
-        }
-        return creds_dict
+        # First try Streamlit secrets (for Community Cloud)
+        if 'GOOGLE_CREDENTIALS' in st.secrets:
+            log_debug("Using credentials from Streamlit secrets")
+            creds_dict = dict(st.secrets['GOOGLE_CREDENTIALS'])
+            
+            # Ensure private key is properly formatted
+            if 'private_key' in creds_dict:
+                creds_dict['private_key'] = creds_dict['private_key'].replace('\\n', '\n')
+            
+            return creds_dict
+            
+        # Fall back to environment variables (for local development)
+        else:
+            log_debug("Using credentials from environment variables")
+            private_key = os.getenv("GOOGLE_PRIVATE_KEY", "").replace('\\n', '\n')
+            
+            if not private_key:
+                st.error("❌ Google credentials not found")
+                return None
+                
+            creds_dict = {
+                "type": "service_account",
+                "project_id": os.getenv("GOOGLE_PROJECT_ID", ""),
+                "private_key_id": os.getenv("GOOGLE_PRIVATE_KEY_ID", ""),
+                "private_key": private_key,
+                "client_email": os.getenv("GOOGLE_CLIENT_EMAIL", ""),
+                "client_id": os.getenv("GOOGLE_CLIENT_ID", ""),
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                "client_x509_cert_url": os.getenv("GOOGLE_CLIENT_X509_CERT_URL", "")
+            }
+            return creds_dict
+            
     except Exception as e:
-        st.error(f"❌ Error loading Google credentials: {str(e)}")
+        st.error(f"❌ Error getting Google credentials: {str(e)}")
+        add_debug_log(f"Error getting Google credentials: {traceback.format_exc()}", "ERROR")
         return None
 
 def setup_google_sheets():
     """Setup Google Sheets connection"""
     try:
-        creds_dict = get_google_creds()
+        log_debug("Setting up Google Sheets connection...")
+        
+        SCOPES = ['https://spreadsheets.google.com/feeds', 
+                 'https://www.googleapis.com/auth/drive']
+        
+        # Get credentials
+        creds_dict = get_google_credentials()
+        
         if not creds_dict:
+            st.error("❌ No Google credentials found")
             return None
         
         # Check if private key exists
         if not creds_dict.get("private_key"):
-            st.error("❌ Google credentials not properly configured. Please check your .env file.")
+            st.error("❌ Google private key not found in credentials")
             return None
-            
+        
+        # Create credentials
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPES)
+        
+        # Authorize client
         client = gspread.authorize(creds)
         
+        # Try to open the sheet
+        SHEET_NAME = "Leave_Applications"
         try:
-            sheet = client.open(SHEET_NAME).sheet1
+            spreadsheet = client.open(SHEET_NAME)
+            sheet = spreadsheet.sheet1
+            log_debug(f"Successfully connected to sheet: {SHEET_NAME}")
+            
+            # Check if headers exist, add them if not
+            try:
+                if sheet.row_count == 0 or not sheet.row_values(1):
+                    headers = [
+                        "Submission Date", "Employee Name", "Employee Code", "Department",
+                        "Type of Leave", "No of Days", "Purpose of Leave", "From Date",
+                        "Till Date", "Superior Name", "Superior Email", "Status", 
+                        "Approval Date", "Approval Password"
+                    ]
+                    sheet.append_row(headers)
+                    log_debug("Added headers to sheet")
+            except Exception as e:
+                log_debug(f"Warning: Could not check/add headers: {str(e)}")
+            
+            return sheet
+            
         except gspread.SpreadsheetNotFound:
             st.error(f"❌ Google Sheet '{SHEET_NAME}' not found!")
+            st.info(f"Please create a sheet named '{SHEET_NAME}' in Google Sheets and share it with: {creds_dict.get('client_email', 'service account email')}")
+            return None
+        except Exception as e:
+            st.error(f"❌ Error accessing sheet: {str(e)}")
             return None
         
-        # Check if headers exist, add them if not
-        try:
-            if sheet.row_count == 0 or not sheet.row_values(1):
-                headers = [
-                    "Submission Date", "Employee Name", "Employee Code", "Department",
-                    "Type of Leave", "No of Days", "Purpose of Leave", "From Date",
-                    "Till Date", "Superior Name", "Superior Email", "Status", 
-                    "Approval Date", "Approval Password"
-                ]
-                sheet.append_row(headers)
-        except Exception as e:
-            pass
-        
-        return sheet
+    except Exception as e:
+        error_msg = f"❌ Error in setup_google_sheets: {str(e)}"
+        st.error(error_msg)
+        add_debug_log(f"setup_google_sheets error: {traceback.format_exc()}", "ERROR")
+        return None
+
+def get_email_credentials():
+    """Get email credentials from Streamlit secrets or environment variables"""
+    try:
+        # Try Streamlit secrets first
+        if 'EMAIL' in st.secrets:
+            sender_email = st.secrets['EMAIL']['sender_email']
+            sender_password = st.secrets['EMAIL']['sender_password']
+            add_debug_log(f"Got email credentials from Streamlit secrets for: {sender_email}", "INFO")
+            return sender_email, sender_password, "Streamlit Secrets"
+        else:
+            # Fall back to environment variables
+            sender_email = os.getenv("SENDER_EMAIL", "")
+            sender_password = os.getenv("SENDER_PASSWORD", "")
+            add_debug_log(f"Got email credentials from environment variables for: {sender_email}", "INFO")
+            return sender_email, sender_password, "Environment Variables"
         
     except Exception as e:
-        st.error(f"❌ Error connecting to Google Sheets: {str(e)}")
-        return None
+        add_debug_log(f"Error getting email credentials: {str(e)}", "ERROR")
+        return "", "", "Error"
+
+def check_email_configuration():
+    """Check if email is configured properly"""
+    sender_email, sender_password, source = get_email_credentials()
+    
+    if not sender_email or not sender_password:
+        return {
+            "configured": False,
+            "message": "❌ Email credentials not found",
+            "details": f"Please check your {source} configuration",
+            "source": source
+        }
+    
+    # Test if credentials might be an app password (16 characters)
+    if len(sender_password) == 16 and ' ' not in sender_password:
+        password_type = "App Password"
+    elif len(sender_password) > 0:
+        password_type = "Regular Password"
+    else:
+        password_type = "Unknown"
+    
+    return {
+        "configured": True,
+        "sender_email": sender_email,
+        "source": source,
+        "password_type": password_type,
+        "message": f"✅ Email credentials found ({password_type})"
+    }
+
+def create_smtp_connection(sender_email, sender_password, method="auto"):
+    """Create and return SMTP connection with proper error handling"""
+    try:
+        add_debug_log(f"Attempting SMTP connection with method: {method}", "INFO")
+        
+        if method == "ssl" or method == "auto":
+            try:
+                # Method 1: SMTP_SSL (Port 465) - Most reliable for Gmail
+                add_debug_log("Trying SMTP_SSL on port 465...", "INFO")
+                context = ssl.create_default_context()
+                server = smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30, context=context)
+                server.login(sender_email, sender_password)
+                add_debug_log("SMTP_SSL connection successful", "SUCCESS")
+                return server, "SMTP_SSL (Port 465)"
+            except Exception as e:
+                add_debug_log(f"SMTP_SSL failed: {str(e)}", "WARNING")
+        
+        if method == "starttls" or method == "auto":
+            try:
+                # Method 2: STARTTLS (Port 587) - Alternative
+                add_debug_log("Trying STARTTLS on port 587...", "INFO")
+                server = smtplib.SMTP('smtp.gmail.com', 587, timeout=30)
+                server.starttls(context=ssl.create_default_context())
+                server.login(sender_email, sender_password)
+                add_debug_log("STARTTLS connection successful", "SUCCESS")
+                return server, "STARTTLS (Port 587)"
+            except Exception as e:
+                add_debug_log(f"STARTTLS failed: {str(e)}", "WARNING")
+        
+        return None, "All connection methods failed"
+        
+    except Exception as e:
+        add_debug_log(f"SMTP connection error: {str(e)}", "ERROR")
+        return None, str(e)
+
+def test_email_connection(test_recipient=None):
+    """Test email connection by sending a test email"""
+    try:
+        sender_email, sender_password, source = get_email_credentials()
+        
+        if not sender_email or not sender_password:
+            result = {
+                "success": False,
+                "message": "❌ Email credentials not configured",
+                "details": "Please check your secrets.toml or environment variables",
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            add_debug_log("Email test failed: No credentials", "ERROR")
+            return result
+        
+        # Use test recipient or sender's email for testing
+        recipient = test_recipient or sender_email
+        
+        # Create test message
+        msg = MIMEMultipart()
+        msg['From'] = sender_email
+        msg['To'] = recipient
+        msg['Subject'] = "📧 VOLAR FASHION - Email Configuration Test"
+        
+        test_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        body = f"""
+        This is a test email from VOLAR FASHION Leave Management System.
+        
+        Test Details:
+        - Time: {test_time}
+        - Sender: {sender_email}
+        - Recipient: {recipient}
+        - Source: {source}
+        
+        If you received this email, your email configuration is working correctly!
+        
+        --
+        VOLAR FASHION HR Department
+        """
+        
+        msg.attach(MIMEText(body, 'plain'))
+        
+        # Try to create SMTP connection
+        server, method = create_smtp_connection(sender_email, sender_password)
+        
+        if server:
+            try:
+                server.send_message(msg)
+                server.quit()
+                result = {
+                    "success": True,
+                    "message": f"✅ Email sent successfully via {method}",
+                    "details": f"Test email sent to {recipient} at {test_time}",
+                    "method": method,
+                    "sender": sender_email,
+                    "timestamp": test_time
+                }
+                add_debug_log(f"Test email sent successfully to {recipient}", "SUCCESS")
+                return result
+            except Exception as e:
+                server.quit()
+                add_debug_log(f"Error sending test email: {str(e)}", "ERROR")
+                raise e
+        else:
+            error_msg = f"❌ Could not establish SMTP connection. Method tried: {method}"
+            
+            # Check for specific authentication errors
+            if "535" in method or "534" in method:
+                error_msg = "❌ SMTP Authentication Error - App Password Required"
+                troubleshooting = """
+                **Solution:**
+                1. Go to: https://myaccount.google.com/security
+                2. Enable 2-Step Verification
+                3. Go to: https://myaccount.google.com/apppasswords
+                4. Generate an App Password for "Mail"
+                5. Use the 16-character App Password in secrets.toml
+                """
+            elif "Connection refused" in method or "timed out" in method:
+                error_msg = "❌ Network Connection Error"
+                troubleshooting = "Check if Streamlit Cloud allows outgoing SMTP connections"
+            else:
+                troubleshooting = "Please check your email credentials and try again"
+            
+            result = {
+                "success": False,
+                "message": error_msg,
+                "details": f"{troubleshooting}\n\nError: {method}",
+                "sender": sender_email,
+                "timestamp": test_time
+            }
+            add_debug_log(f"Test email failed: {method}", "ERROR")
+            return result
+        
+    except smtplib.SMTPAuthenticationError as e:
+        error_msg = str(e)
+        result = {
+            "success": False,
+            "message": "❌ SMTP Authentication Failed",
+            "details": f"Error: {error_msg}\n\n**Solution:** Use an App Password (not your regular Gmail password). Enable 2-Step Verification first.",
+            "sender": sender_email,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        add_debug_log(f"SMTP Authentication Error: {error_msg}", "ERROR")
+        return result
+    except Exception as e:
+        error_msg = str(e)
+        result = {
+            "success": False,
+            "message": "❌ Unexpected Error",
+            "details": f"Error: {error_msg}",
+            "sender": sender_email,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        add_debug_log(f"Unexpected error in test_email_connection: {traceback.format_exc()}", "ERROR")
+        return result
 
 def calculate_days(from_date, till_date, leave_type):
     """Calculate number of days"""
@@ -634,293 +985,74 @@ def calculate_days(from_date, till_date, leave_type):
         return delta.days + 1
 
 def send_approval_email(employee_name, superior_name, superior_email, leave_details, approval_password):
-    """Send beautiful approval request email to superior"""
+    """Send approval request email to superior"""
     try:
-        # Check if email credentials are configured
-        if not SENDER_PASSWORD:
-            st.error("❌ Email password not configured. Please check your .env file.")
+        # Get email credentials
+        sender_email, sender_password, source = get_email_credentials()
+        
+        if not sender_email or not sender_password:
+            st.warning("⚠️ Email credentials not configured")
+            add_debug_log("Email credentials missing", "WARNING")
             return False
             
+        # Check if it's a valid email
+        if "@" not in superior_email or "." not in superior_email:
+            st.warning(f"⚠️ Invalid email format: {superior_email}")
+            add_debug_log(f"Invalid email format: {superior_email}", "WARNING")
+            return False
+        
+        # Get app URL
+        try:
+            app_url = st.secrets.get("APP_URL", "https://hr-application-rtundoncudkzt9efwnscey.streamlit.app/")
+        except:
+            app_url = "https://hr-application-rtundoncudkzt9efwnscey.streamlit.app/"
+        
+        # Create email message
         msg = MIMEMultipart('alternative')
-        msg['From'] = f"VOLAR FASHION HR <{SENDER_EMAIL}>"
+        msg['From'] = f"VOLAR FASHION HR <{sender_email}>"
         msg['To'] = superior_email
         msg['Subject'] = f"Leave Approval Required: {employee_name}"
         
-        app_url = "https://hr-application-rtundoncudkzt9efwnscey.streamlit.app/"
-        
-        # Determine duration display
-        if leave_details['leave_type'] == 'Early Exit':
-            duration_display = 'N/A'
-        else:
-            duration_display = f"{leave_details['no_of_days']} days"
-        
+        # Simple HTML email body
         html_body = f"""
-        <!DOCTYPE html>
         <html>
-        <head>
-            <style>
-                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-                body {{
-                    font-family: 'Inter', sans-serif;
-                    background: linear-gradient(135deg, #f8f9ff 0%, #f5f7fa 100%);
-                    margin: 0;
-                    padding: 40px 20px;
-                }}
-                .container {{
-                    max-width: 600px;
-                    margin: 0 auto;
-                    background: white;
-                    border-radius: 24px;
-                    overflow: hidden;
-                    box-shadow: 0 20px 60px rgba(103, 58, 183, 0.1);
-                    border: 1px solid rgba(103, 58, 183, 0.1);
-                }}
-                .header {{
-                    background: linear-gradient(135deg, #673ab7 0%, #9c27b0 100%);
-                    padding: 40px 30px;
-                    text-align: center;
-                    color: white;
-                    position: relative;
-                    overflow: hidden;
-                }}
-                .header:before {{
-                    content: '';
-                    position: absolute;
-                    top: 0;
-                    left: 0;
-                    right: 0;
-                    height: 4px;
-                    background: linear-gradient(90deg, #ff9800, #ff5722);
-                }}
-                .header h1 {{
-                    margin: 0;
-                    font-size: 28px;
-                    font-weight: 600;
-                    letter-spacing: -0.5px;
-                }}
-                .header p {{
-                    margin: 10px 0 0 0;
-                    font-size: 16px;
-                    opacity: 0.9;
-                }}
-                .content {{
-                    padding: 40px;
-                }}
-                .greeting {{
-                    font-size: 18px;
-                    color: #333;
-                    margin-bottom: 25px;
-                    line-height: 1.6;
-                }}
-                .details-card {{
-                    background: #f8f9ff;
-                    border-radius: 16px;
-                    padding: 30px;
-                    margin: 30px 0;
-                    border: 1px solid rgba(103, 58, 183, 0.1);
-                }}
-                .detail-item {{
-                    display: flex;
-                    align-items: center;
-                    padding: 15px 0;
-                    border-bottom: 1px solid rgba(103, 58, 183, 0.1);
-                }}
-                .detail-item:last-child {{
-                    border-bottom: none;
-                }}
-                .detail-icon {{
-                    width: 40px;
-                    height: 40px;
-                    background: linear-gradient(135deg, #673ab7 0%, #9c27b0 100%);
-                    border-radius: 10px;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    color: white;
-                    margin-right: 15px;
-                    font-size: 18px;
-                }}
-                .detail-content {{
-                    flex: 1;
-                }}
-                .detail-label {{
-                    font-weight: 500;
-                    color: #666;
-                    font-size: 14px;
-                    margin-bottom: 4px;
-                }}
-                .detail-value {{
-                    color: #333;
-                    font-size: 16px;
-                    font-weight: 500;
-                }}
-                .action-button {{
-                    display: inline-block;
-                    background: linear-gradient(135deg, #673ab7 0%, #9c27b0 100%);
-                    color: white;
-                    padding: 16px 40px;
-                    text-decoration: none;
-                    border-radius: 12px;
-                    font-weight: 600;
-                    margin-top: 20px;
-                    transition: all 0.3s ease;
-                    box-shadow: 0 8px 25px rgba(103, 58, 183, 0.2);
-                }}
-                .action-button:hover {{
-                    transform: translateY(-2px);
-                    box-shadow: 0 12px 35px rgba(103, 58, 183, 0.3);
-                }}
-                .instructions {{
-                    background: #fff8e1;
-                    border-radius: 12px;
-                    padding: 25px;
-                    margin: 30px 0;
-                    border-left: 4px solid #ff9800;
-                }}
-                .footer {{
-                    background: #f5f7fa;
-                    padding: 30px;
-                    text-align: center;
-                    color: #666;
-                    font-size: 14px;
-                    border-top: 1px solid #e0e0e0;
-                }}
-                .company-name {{
-                    color: #673ab7;
-                    font-weight: 600;
-                    font-size: 18px;
-                    margin-bottom: 10px;
-                }}
-                .badge {{
-                    display: inline-block;
-                    background: #673ab7;
-                    color: white;
-                    padding: 6px 16px;
-                    border-radius: 20px;
-                    font-size: 12px;
-                    font-weight: 500;
-                    margin-bottom: 20px;
-                }}
-                .emoji {{
-                    font-size: 48px;
-                    margin-bottom: 20px;
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <div class="emoji">📋</div>
-                    <h1>Leave Approval Required</h1>
-                    <p>VOLAR FASHION HR Management System</p>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6;">
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                <h2 style="color: #673ab7;">Leave Approval Required</h2>
+                <p>Dear {superior_name},</p>
+                
+                <div style="background: #f8f9ff; padding: 20px; border-radius: 10px; margin: 20px 0;">
+                    <h3>Employee Leave Request Details:</h3>
+                    <p><strong>Employee Name:</strong> {leave_details['employee_name']}</p>
+                    <p><strong>Employee Code:</strong> {leave_details['employee_code']}</p>
+                    <p><strong>Department:</strong> {leave_details['department']}</p>
+                    <p><strong>Leave Type:</strong> {leave_details['leave_type']}</p>
+                    <p><strong>From Date:</strong> {leave_details['from_date']}</p>
+                    <p><strong>Till Date:</strong> {leave_details['till_date']}</p>
+                    <p><strong>Duration:</strong> {leave_details['no_of_days']} days</p>
+                    <p><strong>Purpose:</strong> {leave_details['purpose']}</p>
                 </div>
                 
-                <div class="content">
-                    <div class="greeting">
-                        Dear <strong style="color: #673ab7;">{superior_name}</strong>,<br><br>
-                        An employee has submitted a leave request that requires your approval. 
-                        Please review the details below and take appropriate action.
-                    </div>
-                    
-                    <div class="badge">Action Required</div>
-                    
-                    <div class="details-card">
-                        <div class="detail-item">
-                            <div class="detail-icon">👤</div>
-                            <div class="detail-content">
-                                <div class="detail-label">Employee Name</div>
-                                <div class="detail-value">{leave_details['employee_name']}</div>
-                            </div>
-                        </div>
-                        <div class="detail-item">
-                            <div class="detail-icon">🔢</div>
-                            <div class="detail-content">
-                                <div class="detail-label">Employee Code</div>
-                                <div class="detail-value">{leave_details['employee_code']}</div>
-                            </div>
-                        </div>
-                        <div class="detail-item">
-                            <div class="detail-icon">🏛️</div>
-                            <div class="detail-content">
-                                <div class="detail-label">Department</div>
-                                <div class="detail-value">{leave_details['department']}</div>
-                            </div>
-                        </div>
-                        <div class="detail-item">
-                            <div class="detail-icon">📅</div>
-                            <div class="detail-content">
-                                <div class="detail-label">Leave Period</div>
-                                <div class="detail-value">{leave_details['from_date']} to {leave_details['till_date']}</div>
-                            </div>
-                        </div>
-                        <div class="detail-item">
-                            <div class="detail-icon">📊</div>
-                            <div class="detail-content">
-                                <div class="detail-label">Duration</div>
-                                <div class="detail-value">{duration_display} ({leave_details['leave_type']})</div>
-                            </div>
-                        </div>
-                        <div class="detail-item">
-                            <div class="detail-icon">📝</div>
-                            <div class="detail-content">
-                                <div class="detail-label">Purpose</div>
-                                <div class="detail-value">{leave_details['purpose']}</div>
-                            </div>
-                        </div>
-                        
-                        <!-- APPROVAL CODE FIELD -->
-                        <div class="detail-item">
-                            <div class="detail-icon" style="background: linear-gradient(135deg, #4caf50 0%, #388e3c 100%);">🔐</div>
-                            <div class="detail-content">
-                                <div class="detail-label">Approval Code (5 characters)</div>
-                                <div class="detail-value" style="font-size: 24px; font-weight: 700; color: #673ab7; letter-spacing: 3px; font-family: 'Courier New', monospace;">
-                                    {approval_password}
-                                </div>
-                                <div style="font-size: 13px; color: #666; margin-top: 5px;">
-                                    Use this code along with your email in the approval portal
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div style="text-align: center; margin: 40px 0;">
-                        <div style="background: #e8f5e9; border-radius: 12px; padding: 20px; margin-bottom: 20px; border: 2px solid #4caf50;">
-                            <div style="font-size: 16px; font-weight: 600; color: #2e7d32; margin-bottom: 10px;">
-                                ✅ How to Approve/Reject This Request
-                            </div>
-                            <div style="font-size: 14px; color: #388e3c; line-height: 1.6;">
-                                1. <strong>Visit:</strong> <a href="{app_url}" style="color: #673ab7; font-weight: 500;">Approval Portal</a><br>
-                                2. <strong>Enter your email:</strong> {superior_email}<br>
-                                3. <strong>Enter approval code:</strong> {approval_password}<br>
-                                4. <strong>Select</strong> Approve or Reject<br>
-                                5. <strong>Click</strong> Submit Decision
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="instructions">
-                        <strong style="color: #ff9800; display: block; margin-bottom: 10px;">📋 Important Notes:</strong>
-                        1. This approval code is valid for single use only<br>
-                        2. Code will expire after approval/rejection decision<br>
-                        3. Please process this request within 24 hours<br>
-                        4. For any issues, contact HR at hrvolarfashion@gmail.com
-                    </div>
-                    
-                    <div style="text-align: center;">
-                        <a href="{app_url}" class="action-button">🚀 Go to Approval Portal Now</a>
-                    </div>
+
+                
+                <div style="margin: 30px 0;">
+                    <p><strong>How to Approve/Reject:</strong></p>
+                    <ol>
+                        <li>Visit: <a href="{app_url}">{app_url}</a></li>
+                        <li>Click on "✅ Approval Portal" tab</li>
+                        <li>Enter your email: {superior_email}</li>
+                        <li>Enter approval code: {approval_password}</li>
+                        <li>Select Approve or Reject</li>
+                        <li>Click Submit Decision</li>
+                    </ol>
                 </div>
                 
-                <div class="footer">
-                    <div class="company-name">VOLAR FASHION PVT LTD</div>
-                    <div style="margin-top: 10px; color: #888;">
-                        Human Resources Department<br>
-                        📧 hrvolarfashion@gmail.com | 🌐 www.volarfashion.com
-                    </div>
-                    <div style="margin-top: 20px; font-size: 12px; color: #aaa;">
-                        This is an automated message. Please do not reply directly to this email.
-                    </div>
-                </div>
+                <hr>
+                <p style="color: #666; font-size: 12px;">
+                    VOLAR FASHION PVT LTD - HR Department<br>
+                    📧 hrvolarfashion@gmail.com<br>
+                    This is an automated message.
+                </p>
             </div>
         </body>
         </html>
@@ -928,34 +1060,212 @@ def send_approval_email(employee_name, superior_name, superior_email, leave_deta
         
         msg.attach(MIMEText(html_body, 'html'))
         
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(SENDER_EMAIL, SENDER_PASSWORD)
-            server.send_message(msg)
+        # Create SMTP connection
+        server, method = create_smtp_connection(sender_email, sender_password)
         
-        return True
+        if server:
+            try:
+                server.send_message(msg)
+                server.quit()
+                add_debug_log(f"Approval email sent to {superior_email} via {method}", "SUCCESS")
+                return True
+            except Exception as e:
+                server.quit()
+                add_debug_log(f"Failed to send approval email: {str(e)}", "ERROR")
+                return False
+        else:
+            add_debug_log(f"Could not establish SMTP connection for approval email", "ERROR")
+            return False
+            
     except Exception as e:
-        st.error(f"Error sending email: {str(e)}")
+        add_debug_log(f"Error in send_approval_email: {traceback.format_exc()}", "ERROR")
         return False
 
 def update_leave_status(sheet, superior_email, approval_password, status):
-    """Update leave status in Google Sheet using email and password"""
+    """Update leave status in Google Sheet"""
     try:
         all_records = sheet.get_all_values()
         
         for idx, row in enumerate(all_records):
-            if idx == 0:
+            if idx == 0:  # Skip header
                 continue
             
             if len(row) > 13 and row[10] == superior_email and row[13] == approval_password:
-                sheet.update_cell(idx + 1, 12, status)
-                sheet.update_cell(idx + 1, 13, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-                sheet.update_cell(idx + 1, 14, "USED")
+                sheet.update_cell(idx + 1, 12, status)  # Status column
+                sheet.update_cell(idx + 1, 13, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))  # Approval date
+                sheet.update_cell(idx + 1, 14, "USED")  # Mark password as used
+                add_debug_log(f"Updated row {idx + 1} to status: {status}", "INFO")
                 return True
         
+        add_debug_log("No matching record found for approval", "WARNING")
         return False
+        
     except Exception as e:
-        st.error(f"Error updating status: {str(e)}")
+        st.error(f"❌ Error updating status: {str(e)}")
+        add_debug_log(f"Update error: {traceback.format_exc()}", "ERROR")
         return False
+
+# JavaScript for copying to clipboard
+copy_js = """
+<script>
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).then(function() {
+        var successElement = document.getElementById('copy-success');
+        if (successElement) {
+            successElement.style.display = 'block';
+            setTimeout(function() {
+                successElement.style.display = 'none';
+            }, 2000);
+        }
+    }, function(err) {
+        console.error('Could not copy text: ', err);
+    });
+}
+</script>
+"""
+
+st.markdown(copy_js, unsafe_allow_html=True)
+
+# ============================================
+# SIDEBAR - EMAIL TESTING & CONFIGURATION
+# ============================================
+st.sidebar.title("🔧 Configuration Panel")
+
+# Check current email configuration
+email_config = check_email_configuration()
+
+# Display current email status
+st.sidebar.markdown("### 📧 Email Configuration")
+if email_config["configured"]:
+    st.sidebar.success(email_config["message"])
+    st.sidebar.info(f"**Sender:** {email_config['sender_email']}")
+    if 'password_type' in email_config:
+        st.sidebar.info(f"**Password Type:** {email_config['password_type']}")
+    st.sidebar.info(f"**Source:** {email_config['source']}")
+else:
+    st.sidebar.error(email_config["message"])
+    st.sidebar.info(email_config["details"])
+
+# Test Google Sheets connection
+st.sidebar.markdown("---")
+if st.sidebar.button("🔗 Test Google Sheets Connection"):
+    with st.sidebar:
+        with st.spinner("Testing connection..."):
+            sheet = setup_google_sheets()
+            if sheet:
+                st.success("✅ Connected successfully!")
+                st.info(f"Sheet: Leave_Applications")
+                st.info(f"Rows: {sheet.row_count}")
+            else:
+                st.error("❌ Connection failed")
+
+# Email Testing Section
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📧 Test Email Configuration")
+
+# Show test email input
+test_recipient = st.sidebar.text_input(
+    "Test Recipient Email",
+    value="",
+    placeholder="Enter email to send test to",
+    help="Leave empty to send test to yourself"
+)
+
+col1, col2 = st.sidebar.columns(2)
+with col1:
+    if st.button("🚀 Send Test Email", key="test_email_btn", use_container_width=True):
+        with st.spinner("Sending test email..."):
+            result = test_email_connection(test_recipient)
+            st.session_state.test_email_result = result
+            
+            if result["success"]:
+                st.session_state.email_config_status = "Working"
+            else:
+                st.session_state.email_config_status = "Failed"
+
+with col2:
+    if st.button("🔄 Clear Logs", key="clear_logs", use_container_width=True):
+        st.session_state.debug_logs = []
+
+# Show last test result if available
+if st.session_state.test_email_result:
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 📋 Last Test Result")
+    if st.session_state.test_email_result["success"]:
+        st.sidebar.success("✅ Last test: SUCCESS")
+        st.sidebar.info(f"**Method:** {st.session_state.test_email_result.get('method', 'Unknown')}")
+    else:
+        st.sidebar.error("❌ Last test: FAILED")
+        with st.sidebar.expander("View Error Details"):
+            st.error(st.session_state.test_email_result.get('message', 'No error message'))
+            st.info(st.session_state.test_email_result.get('details', 'No details'))
+
+# Debug Logs Section
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📝 Debug Logs")
+if st.sidebar.checkbox("Show Debug Logs", value=False):
+    if st.session_state.debug_logs:
+        debug_logs_html = "<div class='debug-log'>"
+        for log in reversed(st.session_state.debug_logs[-10:]):  # Show last 10 logs
+            if "ERROR" in log:
+                debug_logs_html += f"<div style='color: #dc3545;'>{log}</div>"
+            elif "SUCCESS" in log or "INFO" in log:
+                debug_logs_html += f"<div style='color: #28a745;'>{log}</div>"
+            elif "WARNING" in log:
+                debug_logs_html += f"<div style='color: #ffc107;'>{log}</div>"
+            else:
+                debug_logs_html += f"<div>{log}</div>"
+        debug_logs_html += "</div>"
+        st.sidebar.markdown(debug_logs_html, unsafe_allow_html=True)
+    else:
+        st.sidebar.info("No debug logs yet")
+
+# Email Configuration Help
+st.sidebar.markdown("---")
+with st.sidebar.expander("📖 Email Setup Guide"):
+    st.markdown("""
+    **Step-by-Step Gmail Configuration:**
+    
+    1. **Enable 2-Step Verification:**
+       - Go to: https://myaccount.google.com/security
+       - Click "2-Step Verification"
+       - Follow prompts to enable it
+    
+    2. **Generate App Password:**
+       - Go to: https://myaccount.google.com/apppasswords
+       - Select "Mail" as app
+       - Select "Other (Custom name)" as device
+       - Name it "VOLAR FASHION Streamlit"
+       - Click "Generate"
+       - **Copy the 16-character password**
+    
+    3. **Update Streamlit Secrets:**
+       - In Streamlit Cloud, go to App Settings → Secrets
+       - Add this configuration:
+    ```toml
+    [EMAIL]
+    sender_email = "hrvolarfashion@gmail.com"
+    sender_password = "your-16-character-app-password"
+    ```
+    
+    4. **Test Configuration:**
+       - Click "Send Test Email" in sidebar
+       - Check if test email is received
+    
+    **Common Issues:**
+    - ❌ Using regular Gmail password → Use App Password
+    - ❌ 2-Step Verification not enabled → Enable it first
+    - ❌ Outdated password → Generate new App Password
+    - ❌ Network issues → Wait and retry
+    """)
+
+# Email Status in Session State
+if 'email_tested' not in st.session_state:
+    st.session_state.email_tested = False
+
+# ============================================
+# MAIN APPLICATION
+# ============================================
 
 # Beautiful Company Header with Floating Animation
 st.markdown("""
@@ -969,6 +1279,41 @@ st.markdown("""
 tab1, tab2 = st.tabs(["📝 Submit Leave Application", "✅ Approval Portal"])
 
 with tab1:
+    # Email status warning at top of form
+    if not email_config["configured"] or st.session_state.email_config_status == "Failed":
+        st.markdown(f'''
+            <div style="background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
+                        border-left: 4px solid #ff9800; color: #856404;
+                        padding: 1.5rem; border-radius: 12px; margin-bottom: 2rem;">
+                <div style="display: flex; align-items: center;">
+                    <div style="font-size: 1.5rem; margin-right: 15px;">⚠️</div>
+                    <div>
+                        <strong>Email Configuration Issue Detected</strong><br>
+                        <span style="font-size: 0.95rem;">
+                            Emails may not be sent automatically. Please use the manual approval process below if email fails.
+                            Test your email configuration in the sidebar.
+                        </span>
+                    </div>
+                </div>
+            </div>
+        ''', unsafe_allow_html=True)
+    elif st.session_state.email_config_status == "Working":
+        st.markdown(f'''
+            <div style="background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+                        border-left: 4px solid #28a745; color: #155724;
+                        padding: 1.5rem; border-radius: 12px; margin-bottom: 2rem;">
+                <div style="display: flex; align-items: center;">
+                    <div style="font-size: 1.5rem; margin-right: 15px;">✅</div>
+                    <div>
+                        <strong>Email Configuration Working</strong><br>
+                        <span style="font-size: 0.95rem;">
+                            Email notifications will be sent automatically to managers.
+                        </span>
+                    </div>
+                </div>
+            </div>
+        ''', unsafe_allow_html=True)
+    
     # Form Header with Icon
     st.markdown("""
         <div class="section-header">
@@ -1122,23 +1467,13 @@ with tab1:
                     </div>
                 ''', unsafe_allow_html=True)
             else:
-                with st.spinner(''):
-                    st.markdown("""
-                        <div style="text-align: center; padding: 3rem;">
-                            <div style="font-size: 3rem; color: #673ab7; margin-bottom: 1rem;">⏳</div>
-                            <div style="font-size: 1.2rem; color: #4a5568; margin-bottom: 0.5rem;">
-                                Processing your request
-                            </div>
-                            <div style="color: #718096;">
-                                Please wait while we submit your application...
-                            </div>
-                        </div>
-                    """, unsafe_allow_html=True)
-                    
+                with st.spinner('Submitting your application...'):
+                    # Prepare data
                     submission_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     superior_email = SUPERIORS[superior_name]
                     approval_password = generate_approval_password()
                     
+                    # Prepare leave details
                     leave_details = {
                         "employee_name": employee_name,
                         "employee_code": employee_code,
@@ -1150,35 +1485,51 @@ with tab1:
                         "till_date": till_date.strftime("%Y-%m-%d")
                     }
                     
+                    # Connect to Google Sheets
                     sheet = setup_google_sheets()
+                    
                     if sheet:
-                        row_data = [
-                            submission_date,
-                            employee_name,
-                            employee_code,
-                            department,
-                            leave_type,
-                            no_of_days,
-                            purpose,
-                            leave_details['from_date'],
-                            leave_details['till_date'],
-                            superior_name,
-                            superior_email,
-                            "Pending",
-                            "",
-                            approval_password
-                        ]
-                        
                         try:
-                            sheet.append_row(row_data)
-                            
-                            email_sent = send_approval_email(
+                            # Prepare row data
+                            row_data = [
+                                submission_date,
                                 employee_name,
+                                employee_code,
+                                department,
+                                leave_type,
+                                str(no_of_days),
+                                purpose,
+                                leave_details['from_date'],
+                                leave_details['till_date'],
                                 superior_name,
                                 superior_email,
-                                leave_details,
+                                "Pending",
+                                "",  # Approval Date (empty initially)
                                 approval_password
-                            )
+                            ]
+                            
+                            # Write to Google Sheets
+                            sheet.append_row(row_data)
+                            add_debug_log(f"Data written to Google Sheets for {employee_name}", "SUCCESS")
+                            
+                            # Try to send email only if configuration is working
+                            email_sent = False
+                            email_error = ""
+                            
+                            if email_config["configured"]:
+                                try:
+                                    email_sent = send_approval_email(
+                                        employee_name,
+                                        superior_name,
+                                        superior_email,
+                                        leave_details,
+                                        approval_password
+                                    )
+                                    if not email_sent:
+                                        email_error = "Email sending failed - check debug logs"
+                                except Exception as e:
+                                    email_error = f"Email exception: {str(e)}"
+                                    add_debug_log(f"Email exception: {traceback.format_exc()}", "ERROR")
                             
                             if email_sent:
                                 st.markdown('''
@@ -1197,37 +1548,108 @@ with tab1:
                                 ''', unsafe_allow_html=True)
                                 
                                 st.balloons()
-                                st.markdown("""
-                                    <div style="text-align: center; margin-top: 2rem;">
-                                        <div style="display: inline-block; animation: float 2s ease-in-out infinite;">
-                                            ✅
-                                        </div>
-                                    </div>
-                                """, unsafe_allow_html=True)
+                                time.sleep(3)
                                 st.rerun()
                             else:
-                                st.markdown('''
-                                    <div class="error-message">
-                                        <div style="display: flex; align-items: center; justify-content: center;">
-                                            <div style="font-size: 1.5rem; margin-right: 10px;">📧</div>
+                                # Show manual approval code section
+                                st.session_state.approval_code_to_copy = approval_password
+                                st.session_state.show_copy_section = True
+                                
+                                st.markdown(f'''
+                                    <div class="info-box">
+                                        <div style="display: flex; align-items: flex-start;">
+                                            <div style="font-size: 1.5rem; margin-right: 15px; color: #ff9800;">📧</div>
                                             <div>
-                                                <strong>Email Notification Failed</strong><br>
-                                                Application saved, but email could not be sent.<br>
-                                                Please inform your manager directly.
+                                                <strong style="display: block; margin-bottom: 8px; color: #ff9800;">Email Notification Issue</strong>
+                                                Your application was saved to the database successfully!<br>
+                                                However, we couldn't send the email notification automatically.<br>
+                                                <small>{email_error}</small>
                                             </div>
                                         </div>
                                     </div>
                                 ''', unsafe_allow_html=True)
+                                
+                                # Manual approval code section
+                                st.markdown("---")
+                                st.markdown("""
+                                    <div style="text-align: center; margin: 2rem 0;">
+                                        <div style="font-size: 1.3rem; font-weight: 600; color: #673ab7; margin-bottom: 1rem;">
+                                            📋 Manual Approval Process
+                                        </div>
+                                        <p style="color: #718096; margin-bottom: 1.5rem;">
+                                            Please share this approval code with your manager <strong>{}</strong>:
+                                        </p>
+                                    </div>
+                                """.format(superior_name), unsafe_allow_html=True)
+                                
+                                # Approval code display with copy button
+                                st.markdown(f"""
+                                    <div style="background: linear-gradient(135deg, #f3e5f5 0%, #e1bee7 100%); 
+                                                padding: 2rem; border-radius: 16px; text-align: center; 
+                                                margin: 1.5rem 0; border: 2px dashed #673ab7;">
+                                        <div style="font-size: 0.9rem; color: #6b46c1; font-weight: 500; margin-bottom: 10px;">
+                                            Approval Code for {superior_name}
+                                        </div>
+                                        <div style="font-size: 2.5rem; font-weight: 700; color: #553c9a; 
+                                                    letter-spacing: 4px; margin: 15px 0; font-family: 'Courier New', monospace;">
+                                            {approval_password}
+                                        </div>
+                                        <div style="font-size: 0.9rem; color: #805ad5; margin-bottom: 20px;">
+                                            5-character code (valid for single use)
+                                        </div>
+                                        
+                                        <button class="copy-code-btn" onclick="copyToClipboard('{approval_password}')">
+                                            📋 Copy Approval Code
+                                        </button>
+                                        <div id="copy-success" class="copy-success">✅ Copied to clipboard!</div>
+                                    </div>
+                                """, unsafe_allow_html=True)
+                                
+                                # Instructions for manager
+                                st.markdown("""
+                                    <div style="background: #e8f5e9; padding: 1.5rem; border-radius: 12px; margin: 1.5rem 0;">
+                                        <strong style="color: #2e7d32; display: block; margin-bottom: 10px;">
+                                            ✅ Instructions for your Manager:
+                                        </strong>
+                                        <ol style="color: #388e3c; margin-left: 20px;">
+                                            <li>Visit: <strong>https://hr-application-rtundoncudkzt9efwnscey.streamlit.app/</strong></li>
+                                            <li>Click on "✅ Approval Portal" tab</li>
+                                            <li>Enter email: <strong>{}</strong></li>
+                                            <li>Enter approval code: <strong>{}</strong></li>
+                                            <li>Select Approve or Reject</li>
+                                            <li>Click Submit Decision</li>
+                                        </ol>
+                                    </div>
+                                """.format(superior_email, approval_password), unsafe_allow_html=True)
+                                
+                                st.balloons()
+                                
                         except Exception as e:
-                            st.markdown(
-                                f'''<div class="error-message">
-                                    <strong>Submission Error</strong><br>
-                                    Please try again or contact HR: {str(e)}
-                                </div>''',
-                                unsafe_allow_html=True
-                            )
-    
-    st.markdown("</div>", unsafe_allow_html=True)
+                            st.markdown(f'''
+                                <div class="error-message">
+                                    <div style="display: flex; align-items: center; justify-content: center;">
+                                        <div style="font-size: 1.5rem; margin-right: 10px;">❌</div>
+                                        <div>
+                                            <strong>Submission Error</strong><br>
+                                            Please try again or contact HR<br>
+                                            Error: {str(e)}
+                                        </div>
+                                    </div>
+                                </div>
+                            ''', unsafe_allow_html=True)
+                            add_debug_log(f"Submission error: {traceback.format_exc()}", "ERROR")
+                    else:
+                        st.markdown('''
+                            <div class="error-message">
+                                <div style="display: flex; align-items: center; justify-content: center;">
+                                    <div style="font-size: 1.5rem; margin-right: 10px;">📊</div>
+                                    <div>
+                                        <strong>Database Connection Error</strong><br>
+                                        Could not connect to database. Please try again later.
+                                    </div>
+                                </div>
+                            </div>
+                        ''', unsafe_allow_html=True)
 
 with tab2:
     # Approval Portal Header
@@ -1332,7 +1754,7 @@ with tab2:
                 <div class="error-message">
                     <div style="display: flex; align-items: center; justify-content: center;">
                         <div style="font-size: 1.5rem; margin-right: 10px;">🔑</div>
-                        <div>
+                            <div>
                             <strong>Invalid Code Format</strong><br>
                             Please enter the exact 5-character code from your email
                         </div>
@@ -1340,48 +1762,73 @@ with tab2:
                 </div>
             ''', unsafe_allow_html=True)
         else:
-            sheet = setup_google_sheets()
-            if sheet:
-                status = "Approved" if action == "✅ Approve" else "Rejected"
-                success = update_leave_status(sheet, superior_email_input, approval_password_input, status)
-                
-                if success:
-                    status_color = "#155724" if status == "Approved" else "#721c24"
-                    status_bg = "#d4edda" if status == "Approved" else "#f8d7da"
-                    status_icon = "✅" if status == "Approved" else "❌"
+            with st.spinner("Processing your decision..."):
+                sheet = setup_google_sheets()
+                if sheet:
+                    status = "Approved" if action == "✅ Approve" else "Rejected"
+                    success = update_leave_status(sheet, superior_email_input, approval_password_input, status)
                     
-                    st.markdown(f'''
-                        <div style="background: {status_bg}; border-left: 4px solid {status_color}; 
-                                  color: {status_color}; padding: 2rem; border-radius: 16px; 
-                                  margin: 2rem 0; text-align: center; animation: slideIn 0.5s ease-out;">
-                            <div style="font-size: 3rem; margin-bottom: 1rem;">{status_icon}</div>
-                            <div style="font-size: 1.5rem; font-weight: 600; margin-bottom: 10px;">
-                                Decision Submitted Successfully!
+                    if success:
+                        status_color = "#155724" if status == "Approved" else "#721c24"
+                        status_bg = "#d4edda" if status == "Approved" else "#f8d7da"
+                        status_icon = "✅" if status == "Approved" else "❌"
+                        
+                        st.markdown(f'''
+                            <div style="background: {status_bg}; border-left: 4px solid {status_color}; 
+                                      color: {status_color}; padding: 2rem; border-radius: 16px; 
+                                      margin: 2rem 0; text-align: center; animation: slideIn 0.5s ease-out;">
+                                <div style="font-size: 3rem; margin-bottom: 1rem;">{status_icon}</div>
+                                <div style="font-size: 1.5rem; font-weight: 600; margin-bottom: 10px;">
+                                    Decision Submitted Successfully!
+                                </div>
+                                <div style="margin-bottom: 15px;">
+                                    The leave request has been <strong>{status.lower()}</strong>.
+                                </div>
+                                <div style="font-size: 0.95rem; opacity: 0.9;">
+                                    The employee has been notified of your decision.
+                                </div>
                             </div>
-                            <div style="margin-bottom: 15px;">
-                                The leave request has been <strong>{status.lower()}</strong>.
+                        ''', unsafe_allow_html=True)
+                        
+                        st.balloons()
+                        time.sleep(2)
+                        st.rerun()
+                    else:
+                        st.markdown('''
+                            <div class="error-message">
+                                <div style="display: flex; align-items: center; justify-content: center;">
+                                    <div style="font-size: 1.5rem; margin-right: 10px;">🔐</div>
+                                    <div>
+                                        <strong>Authentication Failed</strong><br>
+                                        Invalid code or code already used.<br>
+                                        Please check your email or contact HR for assistance.
+                                    </div>
+                                </div>
                             </div>
-                            <div style="font-size: 0.95rem; opacity: 0.9;">
-                                The employee has been notified of your decision.
-                            </div>
-                        </div>
-                    ''', unsafe_allow_html=True)
-                    
-                    st.balloons()
-                    time.sleep(2)
-                    st.rerun()
+                        ''', unsafe_allow_html=True)
                 else:
                     st.markdown('''
                         <div class="error-message">
                             <div style="display: flex; align-items: center; justify-content: center;">
-                                <div style="font-size: 1.5rem; margin-right: 10px;">🔐</div>
+                                <div style="font-size: 1.5rem; margin-right: 10px;">📊</div>
                                 <div>
-                                    <strong>Authentication Failed</strong><br>
-                                    Invalid code or code already used.<br>
-                                    Please check your email or contact HR for assistance.
+                                    <strong>Database Connection Error</strong><br>
+                                    Could not connect to database. Please try again later.
                                 </div>
                             </div>
                         </div>
                     ''', unsafe_allow_html=True)
-    
-    st.markdown("</div>", unsafe_allow_html=True)
+
+# Footer
+st.markdown("""
+    <div class="footer">
+        <div style="margin-bottom: 1rem;">
+            <strong style="color: #673ab7;">VOLAR FASHION PVT LTD</strong><br>
+            Human Resources Management System
+        </div>
+        <div style="font-size: 0.9rem;">
+            📧 hrvolarfashion@gmail.com<br>
+            © 2024 VOLAR FASHION.
+        </div>
+    </div>
+""", unsafe_allow_html=True)
