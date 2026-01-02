@@ -12,11 +12,10 @@ import secrets
 import string
 import os
 import traceback
-from dotenv import load_dotenv
+
 import ssl
 
-# Load environment variables from .env file for local development
-load_dotenv()
+
 
 # Page configuration
 st.set_page_config(
@@ -671,45 +670,40 @@ def generate_approval_password():
     return password
 
 def get_google_credentials():
-    """Get Google credentials from Streamlit secrets or environment variables"""
+    """Get Google credentials from Streamlit secrets"""
     try:
-        # First try Streamlit secrets (for Community Cloud)
-        if 'GOOGLE_CREDENTIALS' in st.secrets:
-            log_debug("Using credentials from Streamlit secrets")
-            creds_dict = dict(st.secrets['GOOGLE_CREDENTIALS'])
+        # Check if secrets exist
+        if 'GOOGLE_CREDENTIALS' not in st.secrets:
+            add_debug_log("GOOGLE_CREDENTIALS not found in secrets", "ERROR")
+            st.error("❌ Google credentials not found in Streamlit secrets")
+            return None
+        
+        add_debug_log("Loading Google credentials from Streamlit secrets", "INFO")
+        
+        # Access each field individually (more reliable in Streamlit Cloud)
+        creds_dict = {
+            "type": st.secrets["GOOGLE_CREDENTIALS"]["type"],
+            "project_id": st.secrets["GOOGLE_CREDENTIALS"]["project_id"],
+            "private_key_id": st.secrets["GOOGLE_CREDENTIALS"]["private_key_id"],
+            "private_key": st.secrets["GOOGLE_CREDENTIALS"]["private_key"],
+            "client_email": st.secrets["GOOGLE_CREDENTIALS"]["client_email"],
+            "client_id": st.secrets["GOOGLE_CREDENTIALS"]["client_id"],
+            "auth_uri": st.secrets["GOOGLE_CREDENTIALS"]["auth_uri"],
+            "token_uri": st.secrets["GOOGLE_CREDENTIALS"]["token_uri"],
+            "auth_provider_x509_cert_url": st.secrets["GOOGLE_CREDENTIALS"]["auth_provider_x509_cert_url"],
+            "client_x509_cert_url": st.secrets["GOOGLE_CREDENTIALS"]["client_x509_cert_url"]
+        }
+        
+        add_debug_log(f"Credentials loaded for: {creds_dict['client_email']}", "SUCCESS")
+        return creds_dict
             
-            # Ensure private key is properly formatted
-            if 'private_key' in creds_dict:
-                creds_dict['private_key'] = creds_dict['private_key'].replace('\\n', '\n')
-            
-            return creds_dict
-            
-        # Fall back to environment variables (for local development)
-        else:
-            log_debug("Using credentials from environment variables")
-            private_key = os.getenv("GOOGLE_PRIVATE_KEY", "").replace('\\n', '\n')
-            
-            if not private_key:
-                st.error("❌ Google credentials not found")
-                return None
-                
-            creds_dict = {
-                "type": "service_account",
-                "project_id": os.getenv("GOOGLE_PROJECT_ID", ""),
-                "private_key_id": os.getenv("GOOGLE_PRIVATE_KEY_ID", ""),
-                "private_key": private_key,
-                "client_email": os.getenv("GOOGLE_CLIENT_EMAIL", ""),
-                "client_id": os.getenv("GOOGLE_CLIENT_ID", ""),
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-                "client_x509_cert_url": os.getenv("GOOGLE_CLIENT_X509_CERT_URL", "")
-            }
-            return creds_dict
-            
+    except KeyError as e:
+        add_debug_log(f"Missing key in GOOGLE_CREDENTIALS: {str(e)}", "ERROR")
+        st.error(f"❌ Missing credential field: {str(e)}")
+        return None
     except Exception as e:
-        st.error(f"❌ Error getting Google credentials: {str(e)}")
         add_debug_log(f"Error getting Google credentials: {traceback.format_exc()}", "ERROR")
+        st.error(f"❌ Error loading credentials: {str(e)}")
         return None
 
 def setup_google_sheets():
@@ -776,21 +770,21 @@ def setup_google_sheets():
         return None
 
 def get_email_credentials():
-    """Get email credentials from Streamlit secrets or environment variables"""
+    """Get email credentials from Streamlit secrets"""
     try:
-        # Try Streamlit secrets first
-        if 'EMAIL' in st.secrets:
-            sender_email = st.secrets['EMAIL']['sender_email']
-            sender_password = st.secrets['EMAIL']['sender_password']
-            add_debug_log(f"Got email credentials from Streamlit secrets for: {sender_email}", "INFO")
-            return sender_email, sender_password, "Streamlit Secrets"
-        else:
-            # Fall back to environment variables
-            sender_email = os.getenv("SENDER_EMAIL", "")
-            sender_password = os.getenv("SENDER_PASSWORD", "")
-            add_debug_log(f"Got email credentials from environment variables for: {sender_email}", "INFO")
-            return sender_email, sender_password, "Environment Variables"
+        if 'EMAIL' not in st.secrets:
+            add_debug_log("EMAIL section not found in secrets", "ERROR")
+            return "", "", "Missing"
         
+        sender_email = st.secrets["EMAIL"]["sender_email"]
+        sender_password = st.secrets["EMAIL"]["sender_password"]
+        
+        add_debug_log(f"Email credentials loaded for: {sender_email}", "INFO")
+        return sender_email, sender_password, "Streamlit Secrets"
+        
+    except KeyError as e:
+        add_debug_log(f"Missing email credential: {str(e)}", "ERROR")
+        return "", "", f"Missing: {str(e)}"
     except Exception as e:
         add_debug_log(f"Error getting email credentials: {str(e)}", "ERROR")
         return "", "", "Error"
@@ -1003,7 +997,7 @@ def send_approval_email(employee_name, superior_name, superior_email, leave_deta
         
         # Get app URL
         try:
-            app_url = st.secrets.get("APP_URL", "https://hr-application-rtundoncudkzt9efwnscey.streamlit.app/")
+            app_url = st.secrets["APP_URL"]
         except:
             app_url = "https://hr-application-rtundoncudkzt9efwnscey.streamlit.app/"
         
